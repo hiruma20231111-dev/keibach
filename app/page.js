@@ -1,5 +1,6 @@
 "use client";
 import { useEffect, useMemo, useState } from "react";
+import Link from "next/link";
 import "./globals.css";
 
 // races.json cols: year,place,field,surf(0芝1ダ),dist,hcap,fil,loc,favo,winp,placed[],tan,uma,wide,s3f,s3t
@@ -14,6 +15,19 @@ const MODES = [
 ];
 
 const median = a => { if(!a.length) return 0; const s=[...a].sort((x,y)=>x-y); const m=s.length>>1; return s.length%2?s[m]:(s[m-1]+s[m])/2; };
+
+// Geminiのmarkdown回答を簡易レンダリング
+function renderMd(text){
+  const bold = s => s.split(/(\*\*[^*]+\*\*)/g).map((p,i)=> p.startsWith("**")&&p.endsWith("**")
+    ? <strong key={i}>{p.slice(2,-2)}</strong> : <span key={i}>{p}</span>);
+  return text.split("\n").map((ln,i)=>{
+    const t=ln.trimEnd();
+    if(/^#{1,6}\s/.test(t)) return <h4 key={i} style={{margin:"14px 0 4px",fontSize:15}}>{bold(t.replace(/^#{1,6}\s/,""))}</h4>;
+    if(/^\s*[-*・]\s/.test(t)) return <li key={i} style={{marginLeft:16}}>{bold(t.replace(/^\s*[-*・]\s/,""))}</li>;
+    if(!t) return <div key={i} style={{height:6}}/>;
+    return <p key={i} style={{margin:"3px 0"}}>{bold(t)}</p>;
+  });
+}
 const C2 = n => n*(n-1)/2;
 const favoBucket = o => o==null?-1 : o<2?0 : o<3.5?1 : o<5?2 : 3;
 
@@ -54,8 +68,13 @@ export default function Page(){
   const [dist,setDist]=useState(1800);
   const [hcap,setHcap]=useState(false);
   const [favo,setFavo]=useState(3.0);
+  const [raceName,setRaceName]=useState("");
+  const [horses,setHorses]=useState("");
+  const [hasKey,setHasKey]=useState(false);
+  const [ai,setAi]=useState({loading:false,text:"",err:""});
 
   useEffect(()=>{ fetch("/races.json").then(r=>r.json()).then(setData); },[]);
+  useEffect(()=>{ setHasKey(!!(typeof window!=="undefined" && localStorage.getItem("keibach_gemini_key"))); },[]);
   const rows = data?.rows || [];
 
   const cohort = useMemo(()=>{
@@ -90,6 +109,30 @@ export default function Page(){
     return {c:"bad",t:`理論上は負け越し（回収率${R.roi.toFixed(0)}%＝控除ぶん不利）。当てにいくより「当たれば大きい」を楽しむ買い方。`};
   };
 
+  const modeLabelOf = k => { const x=MODES.find(z=>z.key===k); return x?`${x.emo}${x.nm}`:k; };
+
+  const runAI = async () => {
+    const key = localStorage.getItem("keibach_gemini_key");
+    const model = localStorage.getItem("keibach_gemini_model") || "gemini-2.5-flash";
+    if(!key){ setAi({loading:false,text:"",err:"設定ページでGemini APIキーを入れてください。"}); return; }
+    setAi({loading:true,text:"",err:""});
+    const modesStats = MODES.map(x=>{ const r=results[x.key]; return r?{
+      label:`${x.emo}${x.nm}`, axis:r.axis, cap:r.cap, points:r.points,
+      roi:r.roi.toFixed(0), hitRate:r.hitRate.toFixed(0),
+      medPay:r.medPay?Math.round(r.medPay).toLocaleString():"—", manRate:r.manRate.toFixed(0),
+    }:null; }).filter(Boolean);
+    try{
+      const res=await fetch("/api/analyze",{method:"POST",headers:{"Content-Type":"application/json"},
+        body:JSON.stringify({ key, model, mode:modeLabelOf(mode),
+          race:{ surfLabel:surf===0?"芝":"ダート", dist, field, hcap, favo, name:raceName },
+          dbStats:{ cohortN:cohort.length, modes:modesStats },
+          horsesText:horses })});
+      const d=await res.json();
+      if(d.error) setAi({loading:false,text:"",err:d.error});
+      else setAi({loading:false,text:d.text||"",err:""});
+    }catch(e){ setAi({loading:false,text:"",err:"通信エラー: "+(e?.message||e)}); }
+  };
+
   const tryParse = txt => {
     const mf=txt.match(/(\d{1,2})\s*頭/); if(mf) setField(Math.min(18,Math.max(5,+mf[1])));
     if(/ダート|ダ\b|[（(]ダ/.test(txt)) setSurf(1); else if(/芝/.test(txt)) setSurf(0);
@@ -102,8 +145,11 @@ export default function Page(){
 
   return (
     <div className="wrap">
-      <h1>🏇 keibach</h1>
-      <p className="sub">検討レースの条件を入れて、モードを選ぶと「どう買うか＋正直な期待値」を10年33,283レースの実測から出します。</p>
+      <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start"}}>
+        <h1>🏇 keibach</h1>
+        <Link href="/settings" style={{fontSize:13,whiteSpace:"nowrap"}}>⚙️ 設定</Link>
+      </div>
+      <p className="sub">検討レースの条件を入れて、モードを選ぶと「どう買うか＋正直な期待値」を10年33,283レースの実測から出します。{hasKey?"":" 🤖プロ分析は設定でGeminiキーを入れると使えます。"}</p>
 
       <h2>① モードを選ぶ</h2>
       <div className="modes">
@@ -135,6 +181,8 @@ export default function Page(){
               <span className={!hcap?"on":""} onClick={()=>setHcap(false)}>いいえ</span>
               <span className={hcap?"on":""} onClick={()=>setHcap(true)}>ハンデ</span>
             </div></div>
+          <div className="field"><label>レース名・クラス（任意）</label>
+            <input type="text" value={raceName} onChange={e=>setRaceName(e.target.value)} placeholder="例: 3歳1勝クラス / 中山金杯"/></div>
         </div>
         <details>
           <summary>レース情報を貼り付けて自動入力（β・簡易）</summary>
@@ -160,6 +208,24 @@ export default function Page(){
           <p className="small">※ 期待値は「この買い方を似たレースで繰り返したときの実測回収率」。100%未満＝理論上マイナス。単発の勝ち負けでなく回収率で見る前提。</p>
         </div>
       ); })() : <div className="panel"><p className="small">条件に合う似たレースが不足しています。頭数・距離・オッズを調整してください。</p></div>}
+
+      <h2>🤖 プロ分析（Gemini）</h2>
+      <div className="panel">
+        <div className="field">
+          <label>出馬表・馬情報を貼り付け（任意・馬名/人気/オッズ/脚質/枠/前走など何でも）</label>
+          <textarea className="paste" style={{minHeight:110}} value={horses} onChange={e=>setHorses(e.target.value)}
+            placeholder={"例:\n1番人気 ①サンプルホース 2.4倍 先行 前走1着\n2番人気 ⑦テストラン 4.1倍 差し 前走3着\n…"}/>
+        </div>
+        <button onClick={runAI} disabled={ai.loading || !hasKey}
+          style={{marginTop:12,padding:"12px 20px",width:"100%",border:"none",borderRadius:10,cursor:hasKey?"pointer":"not-allowed",
+            background:hasKey?"linear-gradient(90deg,var(--high),var(--oana))":"var(--panel2)",
+            color:hasKey?"#1a1200":"var(--mut)",fontSize:15,fontWeight:700}}>
+          {ai.loading?"分析中… 🏇":hasKey?`🤖 ${m.emo}${m.nm}モードでプロ分析する`:"⚙️ 設定でGeminiキーを入れると使えます"}
+        </button>
+        {ai.err && <div className="verdict bad" style={{marginTop:12}}>⚠️ {ai.err}</div>}
+        {ai.text && <div className="verdict" style={{marginTop:14,lineHeight:1.7}}>{renderMd(ai.text)}</div>}
+        <p className="small">回答はGeminiが生成。DB実測の期待値を根拠に、プロ視点で展開・軸・買い目・リスクを洗い出します（数字はDB実測、必勝表現なし）。</p>
+      </div>
 
       <h2>④ 4モード比較（同じレース条件で）</h2>
       <div className="panel">
