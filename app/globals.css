@@ -1,0 +1,39 @@
+:root{
+  --bg:#0f1420; --panel:#171d2b; --panel2:#1e2636; --line:#2a3346;
+  --tx:#e8edf6; --mut:#96a2b8; --acc:#1f9d63; --accw:#e0b64a; --bad:#e0654a;
+}
+*{box-sizing:border-box}
+html,body{margin:0;padding:0}
+body{
+  background:var(--bg); color:var(--tx);
+  font-family:"Segoe UI","Hiragino Kaku Gothic Pro","Meiryo",system-ui,sans-serif;
+  line-height:1.6;
+}
+.wrap{max-width:960px;margin:0 auto;padding:24px 18px 80px}
+h1{font-size:24px;margin:0 0 4px}
+.sub{color:var(--mut);font-size:13px;margin:0 0 22px}
+h2{font-size:16px;margin:30px 0 12px;padding-left:10px;border-left:4px solid var(--acc)}
+.panel{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:16px 18px;margin-bottom:14px}
+table{width:100%;border-collapse:collapse;font-size:13px}
+th,td{padding:7px 9px;border-bottom:1px solid var(--line);text-align:right}
+th:first-child,td:first-child{text-align:left}
+th{color:var(--mut);font-weight:600}
+.ctrls{display:flex;flex-wrap:wrap;gap:14px;align-items:flex-end}
+.field{display:flex;flex-direction:column;gap:5px}
+.field label{font-size:12px;color:var(--mut)}
+select,input[type=number]{background:var(--panel2);color:var(--tx);border:1px solid var(--line);border-radius:7px;padding:7px 9px;font-size:14px}
+.chips{display:flex;flex-wrap:wrap;gap:6px}
+.chip{padding:5px 11px;border-radius:16px;border:1px solid var(--line);background:var(--panel2);color:var(--mut);cursor:pointer;font-size:13px;user-select:none}
+.chip.on{background:var(--acc);color:#fff;border-color:var(--acc)}
+.chip.axis{background:var(--accw);color:#1a1200;border-color:var(--accw)}
+.toggles{display:flex;flex-wrap:wrap;gap:8px}
+.kpis{display:grid;grid-template-columns:repeat(auto-fit,minmax(130px,1fr));gap:10px;margin-top:6px}
+.kpi{background:var(--panel2);border:1px solid var(--line);border-radius:9px;padding:12px;text-align:center}
+.kpi .n{font-size:22px;font-weight:700}
+.kpi .l{font-size:11px;color:var(--mut);margin-top:2px}
+.good{color:var(--acc)} .warn{color:var(--accw)} .bad{color:var(--bad)}
+.note{font-size:12px;color:var(--mut);margin-top:10px}
+.bar{height:9px;border-radius:5px;background:var(--panel2);overflow:hidden;margin-top:8px}
+.bar>i{display:block;height:100%;background:linear-gradient(90deg,var(--acc),var(--accw))}
+.loading{color:var(--mut);padding:40px;text-align:center}
+a{color:var(--accw)}
