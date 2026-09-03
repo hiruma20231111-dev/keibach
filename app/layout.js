@@ -1,6 +1,6 @@
 export const metadata = {
-  title: "keibach — 競馬データ分析",
-  description: "JRA 10年33,283レースの自前DBで回収率を検証する分析ツール",
+  title: "keibach — レース別 期待値ナビ",
+  description: "検討レースの条件とモードを選ぶと、買い方と正直な期待値をJRA10年33,283レースの実測から提示",
 };
 
 export default function RootLayout({ children }) {

@@ -2,194 +2,184 @@
 import { useEffect, useMemo, useState } from "react";
 import "./globals.css";
 
-const C = { year:0, place:1, field:2, surf:3, dist:4, hcap:5, fil:6, loc:7,
+// races.json cols: year,place,field,surf(0芝1ダ),dist,hcap,fil,loc,favo,winp,placed[],tan,uma,wide,s3f,s3t
+const I = { year:0, place:1, field:2, surf:3, dist:4, hcap:5, fil:6, loc:7,
   favo:8, winp:9, placed:10, tan:11, uma:12, wide:13, s3f:14, s3t:15 };
 
-const median = a => { if(!a.length) return 0; const s=[...a].sort((x,y)=>x-y);
-  const m=Math.floor(s.length/2); return s.length%2?s[m]:(s[m-1]+s[m])/2; };
-const mean = a => a.length? a.reduce((x,y)=>x+y,0)/a.length : 0;
-const comb2 = n => n*(n-1)/2;
+const MODES = [
+  { key:"gachi", emo:"🎯", nm:"ガチンコ", ds:"とにかく当てる。本命寄りで的中率重視", axes:[1,2,3], coverMax:6, obj:"hit" },
+  { key:"mid",   emo:"⚖️", nm:"中配当",   ds:"そこそこ当ててそこそこ配当。バランス", axes:[3,4,5], coverMax:8, obj:"roi" },
+  { key:"high",  emo:"💰", nm:"高配当",   ds:"万馬券ゾーン狙い。中穴を軸に", axes:[4,5,6], coverMax:10, obj:"man" },
+  { key:"oana",  emo:"🌋", nm:"大穴",     ds:"一発逆転。人気薄を軸に爆発狙い", axes:[6,7,8], coverMax:12, obj:"payout" },
+];
 
-function BetChips({ set, toggle, axis }) {
-  return (
-    <div className="chips">
-      {Array.from({length:12},(_,i)=>i+1).map(p=>(
-        <span key={p}
-          className={"chip"+(p===axis?" axis":set.has(p)?" on":"")}
-          onClick={()=>toggle(p)}>{p}</span>
-      ))}
-    </div>
-  );
+const median = a => { if(!a.length) return 0; const s=[...a].sort((x,y)=>x-y); const m=s.length>>1; return s.length%2?s[m]:(s[m-1]+s[m])/2; };
+const C2 = n => n*(n-1)/2;
+const favoBucket = o => o==null?-1 : o<2?0 : o<3.5?1 : o<5?2 : 3;
+
+function evalCfg(cohort, axis, coverSet){
+  const n=cohort.length; const points=C2(coverSet.size); const stake=points*100;
+  if(!n || !points) return {axis,coverSet,points,stake,n,hits:0,roi:0,hitRate:0,medPay:0,manRate:0};
+  let hits=0, ret=0, man=0; const pays=[];
+  for(const r of cohort){
+    const p=r[I.placed];
+    if(!Array.isArray(p)||p.length!==3||r[I.s3f]==null) continue;
+    const h = p.includes(axis) && p.every(x=> x===axis || coverSet.has(x));
+    if(h){ hits++; ret+=r[I.s3f]; pays.push(r[I.s3f]); if(r[I.s3f]>=10000) man++; }
+  }
+  return {axis,coverSet,points,stake,n,hits,ret,
+    roi:ret/(n*stake)*100, hitRate:hits/n*100, medPay:median(pays), manRate:man/n*100};
 }
 
-export default function Page() {
+function bestForMode(cohort, mode, field){
+  let best=null;
+  for(const axis of mode.axes){
+    if(axis>field) continue;
+    const cap=Math.min(mode.coverMax, field);
+    const cover=new Set(); for(let k=1;k<=cap;k++) if(k!==axis) cover.add(k);
+    if(cover.size<2) continue;
+    const s=evalCfg(cohort, axis, cover);
+    const score = mode.obj==="hit"?s.hitRate : mode.obj==="roi"?s.roi
+      : mode.obj==="man"?s.manRate*1000+s.roi : s.medPay*10+s.manRate; // payout寄り
+    if(!best || score>best._score){ best={...s,_score:score,cap}; }
+  }
+  return best;
+}
+
+export default function Page(){
   const [data,setData]=useState(null);
-  const [axis,setAxis]=useState(4);
-  const [cover,setCover]=useState(new Set([1,2,3,5,6,7,8]));
-  const [minField,setMinField]=useState(14);
-  const [kongsen,setKongsen]=useState(true);
-  const [cond,setCond]=useState({hcap:true,fil:true,dirt:true,local:true});
-  const [period,setPeriod]=useState("all");
+  const [mode,setMode]=useState("high");
+  const [field,setField]=useState(16);
+  const [surf,setSurf]=useState(1);
+  const [dist,setDist]=useState(1800);
+  const [hcap,setHcap]=useState(false);
+  const [favo,setFavo]=useState(3.0);
 
   useEffect(()=>{ fetch("/races.json").then(r=>r.json()).then(setData); },[]);
-
   const rows = data?.rows || [];
 
-  const q1 = useMemo(()=>{
+  const cohort = useMemo(()=>{
     if(!rows.length) return [];
-    const defs=[["単勝",C.tan],["馬連",C.uma],["ワイド(最小)",C.wide],["3連複",C.s3f],["3連単",C.s3t]];
-    return defs.map(([ja,idx])=>{
-      const v=rows.map(r=>r[idx]).filter(x=>x!=null);
-      const man=v.filter(x=>x>=10000).length;
-      return {ja,n:v.length,man:v.length?man/v.length*100:0,med:median(v),avg:mean(v)};
-    });
-  },[rows]);
+    const fb=favoBucket(favo);
+    const pick=(dTol,fTol)=> rows.filter(r=>
+      r[I.surf]===surf &&
+      r[I.field]!=null && Math.abs(r[I.field]-field)<=fTol &&
+      r[I.dist]!=null && Math.abs(r[I.dist]-dist)<=dTol &&
+      r[I.hcap]===(hcap?1:0) &&
+      (fb<0 || favoBucket(r[I.favo])===fb)
+    );
+    let c=pick(400,2);
+    if(c.length<60) c=pick(600,3);
+    if(c.length<40) c=pick(1000,4);
+    return c;
+  },[rows,surf,field,dist,hcap,favo]);
 
-  const q2 = useMemo(()=>{
-    if(!rows.length) return [];
-    const cats=[
-      ["ハンデ戦",r=>r[C.hcap]===1],
-      ["定量・別定",r=>r[C.hcap]!==1],
-      ["牝馬限定",r=>r[C.fil]===1],
-      ["ダート",r=>r[C.surf]===1],
-      ["芝",r=>r[C.surf]===0],
-      ["ローカル小回り",r=>r[C.loc]===1],
-      ["16頭以上",r=>r[C.field]>=16],
-      ["混戦(1人気≥5倍)",r=>r[C.favo]!=null&&r[C.favo]>=5],
-      ["全体",()=>true],
-    ];
-    return cats.map(([name,f])=>{
-      const v=rows.filter(f).map(r=>r[C.s3f]).filter(x=>x!=null);
-      const man=v.filter(x=>x>=10000).length;
-      return {name,n:v.length,med:median(v),man:v.length?man/v.length*100:0};
-    });
-  },[rows]);
+  const results = useMemo(()=>{
+    if(!cohort.length) return {};
+    const o={}; for(const m of MODES) o[m.key]=bestForMode(cohort,m,field); return o;
+  },[cohort,field]);
 
-  const bt = useMemo(()=>{
-    if(!rows.length) return null;
-    const inPeriod = r => period==="all" || (period==="train"?r[C.year]<=2021:r[C.year]>=2022);
-    const qualifies = r => {
-      if(!inPeriod(r)) return false;
-      if(r[C.field]==null || r[C.field] < minField) return false;
-      if(kongsen && !(r[C.favo]!=null && r[C.favo]>=5)) return false;
-      const conds=[];
-      if(cond.hcap) conds.push(r[C.hcap]===1);
-      if(cond.fil) conds.push(r[C.fil]===1);
-      if(cond.dirt) conds.push(r[C.surf]===1);
-      if(cond.local) conds.push(r[C.loc]===1);
-      if(conds.length===0) return true;      // 条件無指定なら通す
-      return conds.some(Boolean);            // OR
-    };
-    const q = rows.filter(r=>qualifies(r) && r[C.s3f]!=null && Array.isArray(r[C.placed]) && r[C.placed].length===3);
-    const n=q.length;
-    const points=comb2(cover.size); const stake=points*100;
-    if(!n || !points) return {n,points,stake,roi:0,hit:0,man:0,maxStreak:0,lo:0,hi:0,ret:0,cost:0};
-    const results=[]; let ret=0,hit=0,man=0,streak=0,maxStreak=0;
-    for(const r of q){
-      const p=r[C.placed];
-      const h = p.includes(axis) && p.filter(x=>x!==axis).every(x=>cover.has(x));
-      const gain=h?r[C.s3f]:0; ret+=gain; results.push(gain);
-      if(h){hit++; if(r[C.s3f]>=10000)man++; streak=0;} else {streak++; if(streak>maxStreak)maxStreak=streak;}
-    }
-    const cost=n*stake, roi=ret/cost*100;
-    // bootstrap CI
-    const B=1000, boot=[];
-    for(let b=0;b<B;b++){ let s=0; for(let i=0;i<n;i++) s+=results[(Math.random()*n)|0]; boot.push(s/cost*100); }
-    boot.sort((a,b)=>a-b);
-    return {n,points,stake,roi,hit,man,maxStreak,ret,cost,
-      lo:boot[Math.floor(0.025*B)],hi:boot[Math.floor(0.975*B)]};
-  },[rows,axis,cover,minField,kongsen,cond,period]);
+  const m = MODES.find(x=>x.key===mode);
+  const R = results[mode];
 
-  const toggleCover=p=>{ if(p===axis) return; const s=new Set(cover); s.has(p)?s.delete(p):s.add(p); setCover(s); };
-  const roiClass = r => r>=100?"good":r>=75?"warn":"bad";
+  const evClass = roi => roi>=100?"good":roi>=80?"warn":"bad";
+  const verdict = R => {
+    if(!R) return {c:"bad",t:"似たレースが不足。条件を変えてください。"};
+    if(R.roi>=100) return {c:"good",t:`実測ではプラス（回収率${R.roi.toFixed(0)}%）。ただし似たレース${R.n}件・的中${R.hits}回と少なければ偶然の可能性。過信しない。`};
+    if(R.roi>=80) return {c:"warn",t:`ほぼトントン〜やや負け（回収率${R.roi.toFixed(0)}%）。控除率ぶんの不利が残る。`};
+    return {c:"bad",t:`理論上は負け越し（回収率${R.roi.toFixed(0)}%＝控除ぶん不利）。当てにいくより「当たれば大きい」を楽しむ買い方。`};
+  };
 
-  if(!data) return <div className="wrap"><div className="loading">データ読込中… (約2.4MB)</div></div>;
+  const tryParse = txt => {
+    const mf=txt.match(/(\d{1,2})\s*頭/); if(mf) setField(Math.min(18,Math.max(5,+mf[1])));
+    if(/ダート|ダ\b|[（(]ダ/.test(txt)) setSurf(1); else if(/芝/.test(txt)) setSurf(0);
+    const md=txt.match(/(\d{3,4})\s*m/i); if(md) setDist(+md[1]);
+    if(/ハンデ/.test(txt)) setHcap(true);
+    const mo=txt.match(/1番人気[^0-9]{0,6}(\d+\.\d)/); if(mo) setFavo(+mo[1]);
+  };
+
+  if(!data) return <div className="wrap"><div className="loading">データ読込中… 🏇<br/>（10年3.3万レース / 約2.4MB）</div></div>;
 
   return (
     <div className="wrap">
-      <h1>🏇 keibach — 競馬データ分析</h1>
-      <p className="sub">JRA公式PDFから自作パースした <b>{data.n.toLocaleString()}レース</b>（2017–2026）。月額課金ゼロ・自前DB。</p>
+      <h1>🏇 keibach</h1>
+      <p className="sub">検討レースの条件を入れて、モードを選ぶと「どう買うか＋正直な期待値」を10年33,283レースの実測から出します。</p>
 
-      <h2>バックテスト・プレイグラウンド（3連複フォーメーション）</h2>
-      <div className="panel">
-        <div className="ctrls">
-          <div className="field">
-            <label>軸の人気</label>
-            <select value={axis} onChange={e=>{const a=+e.target.value; setAxis(a); const s=new Set(cover); s.delete(a); setCover(s);}}>
-              {Array.from({length:12},(_,i)=>i+1).map(p=><option key={p} value={p}>{p}番人気</option>)}
-            </select>
+      <h2>① モードを選ぶ</h2>
+      <div className="modes">
+        {MODES.map(x=>(
+          <div key={x.key} className={`mode ${x.key}${mode===x.key?" sel":""}`} onClick={()=>setMode(x.key)}>
+            <div className="emo">{x.emo}</div>
+            <div className="nm">{x.nm}モード</div>
+            <div className="ds">{x.ds}</div>
           </div>
-          <div className="field">
-            <label>最小頭数</label>
-            <input type="number" value={minField} min={1} max={18} onChange={e=>setMinField(+e.target.value)} style={{width:80}}/>
-          </div>
-          <div className="field">
-            <label>期間</label>
-            <select value={period} onChange={e=>setPeriod(e.target.value)}>
-              <option value="all">全期間 2017-2026</option>
-              <option value="train">学習 2017-2021</option>
-              <option value="test">検証 2022-2026</option>
-            </select>
-          </div>
-        </div>
-
-        <div className="field" style={{marginTop:14}}>
-          <label>相手の人気（黄=軸 / 緑=相手。クリックで切替）</label>
-          <BetChips set={cover} toggle={toggleCover} axis={axis}/>
-        </div>
-
-        <div className="field" style={{marginTop:14}}>
-          <label>レース条件フィルタ</label>
-          <div className="toggles">
-            <span className={"chip"+(kongsen?" on":"")} onClick={()=>setKongsen(!kongsen)}>混戦(1人気≥5倍)</span>
-            <span className={"chip"+(cond.hcap?" on":"")} onClick={()=>setCond({...cond,hcap:!cond.hcap})}>ハンデ戦</span>
-            <span className={"chip"+(cond.fil?" on":"")} onClick={()=>setCond({...cond,fil:!cond.fil})}>牝馬限定</span>
-            <span className={"chip"+(cond.dirt?" on":"")} onClick={()=>setCond({...cond,dirt:!cond.dirt})}>ダート</span>
-            <span className={"chip"+(cond.local?" on":"")} onClick={()=>setCond({...cond,local:!cond.local})}>ローカル小回り</span>
-          </div>
-          <p className="note">条件はOR（どれか該当で対象）。全部OFFなら頭数・混戦のみで絞り込み。</p>
-        </div>
-
-        {bt && (
-          <>
-            <div className="kpis">
-              <div className="kpi"><div className={"n "+roiClass(bt.roi)}>{bt.roi.toFixed(1)}%</div><div className="l">回収率（分岐100%）</div></div>
-              <div className="kpi"><div className="n">{bt.n.toLocaleString()}</div><div className="l">対象レース</div></div>
-              <div className="kpi"><div className="n">{bt.n?(bt.hit/bt.n*100).toFixed(1):0}%</div><div className="l">的中率 ({bt.hit})</div></div>
-              <div className="kpi"><div className="n">{bt.man}</div><div className="l">万馬券的中</div></div>
-              <div className="kpi"><div className="n">{bt.points}点</div><div className="l">{bt.stake.toLocaleString()}円/R</div></div>
-              <div className="kpi"><div className="n">{bt.maxStreak}</div><div className="l">最大連敗</div></div>
-            </div>
-            <div className="bar"><i style={{width:Math.min(100,bt.roi)+"%"}}/></div>
-            <p className="note">
-              95%信頼区間: <b className={roiClass(bt.lo)}>{bt.lo.toFixed(0)}%</b> 〜 <b className={roiClass(bt.hi)}>{bt.hi.toFixed(0)}%</b>
-              ／ 投資 {bt.cost.toLocaleString()}円 → 払戻 {bt.ret.toLocaleString()}円
-              {bt.lo<100 && <span className="bad"> ／ ⚠️ CI下限が100%未満＝優位は統計的に未確認</span>}
-            </p>
-          </>
-        )}
+        ))}
       </div>
 
-      <h2>Q1. 券種別 万馬券率（配当≥1万円・実データ）</h2>
+      <h2>② 検討レースの条件</h2>
       <div className="panel">
-        <table><thead><tr><th>券種</th><th>n</th><th>万馬券率</th><th>中央値</th><th>平均</th></tr></thead>
-          <tbody>{q1.map(r=>(<tr key={r.ja}><td>{r.ja}</td><td>{r.n.toLocaleString()}</td>
-            <td>{r.man.toFixed(1)}%</td><td>{Math.round(r.med).toLocaleString()}円</td><td>{Math.round(r.avg).toLocaleString()}円</td></tr>))}</tbody>
+        <div className="grid">
+          <div className="field"><label>頭数</label>
+            <input type="number" value={field} min={5} max={18} onChange={e=>setField(+e.target.value)}/></div>
+          <div className="field"><label>コース</label>
+            <div className="seg">
+              <span className={surf===0?"on":""} onClick={()=>setSurf(0)}>芝</span>
+              <span className={surf===1?"on":""} onClick={()=>setSurf(1)}>ダート</span>
+            </div></div>
+          <div className="field"><label>距離(m)</label>
+            <input type="number" value={dist} min={800} max={3600} step={100} onChange={e=>setDist(+e.target.value)}/></div>
+          <div className="field"><label>1番人気オッズ（混戦度）</label>
+            <input type="number" value={favo} min={1} max={20} step={0.1} onChange={e=>setFavo(+e.target.value)}/></div>
+          <div className="field"><label>ハンデ戦？</label>
+            <div className="seg">
+              <span className={!hcap?"on":""} onClick={()=>setHcap(false)}>いいえ</span>
+              <span className={hcap?"on":""} onClick={()=>setHcap(true)}>ハンデ</span>
+            </div></div>
+        </div>
+        <details>
+          <summary>レース情報を貼り付けて自動入力（β・簡易）</summary>
+          <textarea className="paste" placeholder="競馬新聞やレースページのテキストを貼り付け（頭数・芝ダ・距離・1番人気オッズを拾います）"
+            onChange={e=>tryParse(e.target.value)}/>
+          <p className="small">※ 写真・スクショ・URL読み取りはGemini連携（Phase 2）で追加予定。今はテキスト貼り付けのみ。</p>
+        </details>
+      </div>
+
+      <h2>③ {m.emo} {m.nm}モードの推奨</h2>
+      {R && R.n ? (()=>{ const v=verdict(R); return (
+        <div className={`result ${mode}`}>
+          <div className="head">似たレース {R.n}件（{surf===0?"芝":"ダ"}{dist}m・{field}頭前後・{hcap?"ハンデ":"定量"}・1人気{favo}倍帯）から算出</div>
+          <div className="reco">{R.axis}番人気を軸に、3連複フォーメーション<br/>
+            <span style={{fontSize:14,fontWeight:600,color:"var(--mut)"}}>相手＝1〜{R.cap}番人気（{R.points}点 / {R.stake.toLocaleString()}円）</span></div>
+          <div className="kpis">
+            <div className="kpi"><div className={`n ev ${evClass(R.roi)}`}>{R.roi.toFixed(0)}%</div><div className="l">期待値(実測回収率)</div></div>
+            <div className="kpi"><div className="n">{R.hitRate.toFixed(0)}%</div><div className="l">的中率</div></div>
+            <div className="kpi"><div className="n">{R.medPay?Math.round(R.medPay).toLocaleString():"—"}</div><div className="l">当たれば中央値</div></div>
+            <div className="kpi"><div className="n">{R.manRate.toFixed(0)}%</div><div className="l">万馬券率</div></div>
+          </div>
+          <div className={`verdict ${v.c}`}>{v.t}</div>
+          <p className="small">※ 期待値は「この買い方を似たレースで繰り返したときの実測回収率」。100%未満＝理論上マイナス。単発の勝ち負けでなく回収率で見る前提。</p>
+        </div>
+      ); })() : <div className="panel"><p className="small">条件に合う似たレースが不足しています。頭数・距離・オッズを調整してください。</p></div>}
+
+      <h2>④ 4モード比較（同じレース条件で）</h2>
+      <div className="panel">
+        <table>
+          <thead><tr><th>モード</th><th>軸</th><th>相手</th><th>期待値</th><th>的中率</th><th>当たれば中央</th></tr></thead>
+          <tbody>{MODES.map(x=>{ const r=results[x.key]; return (
+            <tr key={x.key} style={{opacity:x.key===mode?1:.7}}>
+              <td>{x.emo}{x.nm}</td>
+              <td>{r?`${r.axis}人気`:"—"}</td>
+              <td>{r?`〜${r.cap}`:"—"}</td>
+              <td className={r?`ev ${evClass(r.roi)}`:""}>{r?`${r.roi.toFixed(0)}%`:"—"}</td>
+              <td>{r?`${r.hitRate.toFixed(0)}%`:"—"}</td>
+              <td>{r&&r.medPay?Math.round(r.medPay).toLocaleString():"—"}</td>
+            </tr>); })}</tbody>
         </table>
       </div>
 
-      <h2>Q2. 荒れやすい条件（3連複・中央値）</h2>
-      <div className="panel">
-        <table><thead><tr><th>条件</th><th>n</th><th>3連複中央値</th><th>万馬券率</th></tr></thead>
-          <tbody>{q2.map(r=>(<tr key={r.name}><td>{r.name}</td><td>{r.n.toLocaleString()}</td>
-            <td>{Math.round(r.med).toLocaleString()}円</td><td>{r.man.toFixed(1)}%</td></tr>))}</tbody>
-        </table>
-        <p className="note">「荒れる＝配当が高い」は事実だが、<b>荒れる≠儲かる</b>。高配当はオッズに織り込み済みで、狙っても控除率ぶん−EVになりやすい（上のバックテストで検証可能）。</p>
-      </div>
-
-      <p className="note" style={{marginTop:24}}>
-        データ出典: JRA公式「年度別成績表」PDF（2017–2026）を自作パース。射幸性を煽る意図はなく、余剰資金前提の統計検証用。
-        単発の的中で手法を評価せず、回収率と信頼区間で判断すること。
+      <p className="foot">
+        データ: JRA公式「年度別成績表」PDF 2017–2026 を自作パースした {data.n.toLocaleString()}レース。
+        射幸性を煽る意図はなく、余剰資金前提の統計検証用。期待値100%未満の買い方は理論上マイナスであることを理解して利用してください。
       </p>
     </div>
   );
